@@ -1,13 +1,50 @@
 const express = require('express');
 const app = express();
 const puppeteer = require('puppeteer');
+const jwt = require("jsonwebtoken");
+const bodyParser = require("body-parser");
+const rateLimit = require("express-rate-limit");
 
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({extended: true}));
 app.listen(3000, function (){
     console.log("Servidor corriendo en el puerto 3000")
 });
 
+//  Credenciales permitidas
+const USER = "EY";
+const PASSWORD = "EY2024";
+
+const apiLimiter = rateLimit({
+    windowMs: 1*60*1000,
+    max: 20,
+    message:{
+        success: false,
+        message: "Demasiadas solicitudes desde esta IP, por favor intente de nuevo después de 1 minuto"
+    }
+})
+
+
+//  Endpoint Login
+app.post("/login", apiLimiter, (req, res) => {
+    const { username, password } = req.body;
+    if (username === USER && password === PASSWORD) {
+        const token = jwt.sign({ username }, "EY", { expiresIn: '24h' }); 
+        res.json({
+            success: true,
+            message: 'Autenticación correcta',
+            token: token
+        });
+    } else {
+        res.status(401).json({
+            success: false,
+            message: 'Usuario o contraseña incorrectos'
+        });
+    }
+});
+
 //  Endpoint para hacer web scrapping a una fuente
-app.get("/search/:source/:entity", async function(req, res){
+app.get("/search/:source/:entity", apiLimiter, verifyToken, async function(req, res){
     const source = req.params.source;
     const entity = req.params.entity;
 
@@ -43,11 +80,13 @@ async function scrapeData(url, entity, source){
     const browser = await puppeteer.launch({
         headless: false,
     });
+
     const page = await browser.newPage();   
     await page.goto(url);
     
     let results = [];
     let resultsCount = 0;
+    let message = "No hay hits";
 
     switch(source){
         case '1':
@@ -81,18 +120,16 @@ async function scrapeData(url, entity, source){
                 });
                 resultsCount = results.length;
             } catch (e) {
-                console.log("No se encontraron elementos.");
+                message = "Error durante la búsqueda de resultados";
             }
             break;
 
         case '2':
             //  Interactuamos con el campo de categoría y esperamos los resultados
             await page.type('#category', entity);
-            await page.waitForTimeout(5000);
-             
+          
             try {
                 await page.waitForSelector('.k-grid-content.k-auto-scrollable tbody');
-                
                 //Extraemos los datos de los resultados de búsqueda
                 results = await page.evaluate(() => {
                     let data = [];
@@ -111,7 +148,7 @@ async function scrapeData(url, entity, source){
                 });
                 resultsCount = results.length;
             } catch (e) {
-                console.log("No se encontraron elementos.");
+                message = message = "Error durante la búsqueda de resultados";
             }
             break;
 
@@ -145,7 +182,7 @@ async function scrapeData(url, entity, source){
                 });
                 resultsCount = results.length;
             } catch (e) {
-                console.log("No se encontraron elementos.");
+                message = message = "Error durante la búsqueda de resultados";
             }
             break;
     }
@@ -154,6 +191,23 @@ async function scrapeData(url, entity, source){
 
     return {
         hits: resultsCount,
-        elementos: results.length > 0 ? results : 'No hay hits',
+        elementos: results.length > 0 ? results : message,
     }; 
+}
+
+function verifyToken(req, res, next) {
+    const bearerHeader = req.headers['authorization'];
+    if (typeof bearerHeader !== 'undefined') {
+        const bearerToken = bearerHeader
+        jwt.verify(bearerToken, "EY", (err, authData) => {
+            if (err) {
+                return res.status(403).json({ success: false, message: 'Token no válido o expirado' });
+            } else {
+                req.authData = authData;
+                next();
+            }
+        });
+    } else {
+        res.status(401).json({ success: false, message: 'Acceso no permitido. No se proporcionó token.' });
+    }
 }
