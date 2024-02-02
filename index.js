@@ -1,10 +1,12 @@
 const express = require('express');
 const app = express();
+const cors = require('cors');
 const puppeteer = require('puppeteer');
 const jwt = require("jsonwebtoken");
 const bodyParser = require("body-parser");
 const rateLimit = require("express-rate-limit");
 
+app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({extended: true}));
 app.listen(3000, function (){
@@ -40,6 +42,23 @@ app.post("/login", apiLimiter, (req, res) => {
             success: false,
             message: 'Usuario o contraseña incorrectos'
         });
+    }
+});
+
+// Endpoint para verificar el token
+app.get("/verify-token", apiLimiter, (req, res) => {
+    const bearerHeader = req.headers['authorization'];
+    
+    if (typeof bearerHeader !== 'undefined') {
+        jwt.verify(bearerHeader, "EY", (err, authData) => {
+            if (err) {
+                res.json({ success: false, message: 'Token no válido o expirado' });
+            } else {
+                res.json({ success: true, message: 'Token válido'});
+            }
+        });
+    } else {
+        res.status(401).json({ success: false, message: 'No se proporcionó token' });
     }
 });
 
@@ -79,6 +98,7 @@ app.get("/search/:source/:entity", apiLimiter, verifyToken, async function(req, 
 async function scrapeData(url, entity, source){
     const browser = await puppeteer.launch({
         headless: false,
+        //slowMo: 500,
     });
 
     const page = await browser.newPage();   
@@ -98,6 +118,7 @@ async function scrapeData(url, entity, source){
 
             //Escribimos en el campo de búsqueda y enviamos el form
             await page.type('input[name="q"]', entity);
+            await page.waitForTimeout(1000);
             await page.click('button[type="submit"]');
 
             // Esperamos a que los resultados de la búsqueda se carguen
@@ -126,8 +147,8 @@ async function scrapeData(url, entity, source){
 
         case '2':
             //  Interactuamos con el campo de categoría y esperamos los resultados
+            await page.waitForTimeout(6000);
             await page.type('#category', entity);
-          
             try {
                 await page.waitForSelector('.k-grid-content.k-auto-scrollable tbody');
                 //Extraemos los datos de los resultados de búsqueda
@@ -156,31 +177,32 @@ async function scrapeData(url, entity, source){
             // Interactuamos con el input y el botón de búsqueda
             await page.type('#ctl00_MainContent_txtLastName', entity);
             await page.click('input[name="ctl00$MainContent$btnSearch"]');
-            await page.waitForSelector('#gvSearchResults tr', { visible: true, timeout: 1000 });
-
-            // Esperar a que los resultados de la búsqueda se carguen
+           
             try {
-                await page.waitForSelector('#gvSearchResults tr', { visible: true, timeout: 1000 });
-
-                // Extraer los datos de los resultados de la búsqueda
-                results = await page.evaluate(() => {
-                    let data = [];
-                    document.querySelectorAll('#gvSearchResults tr').forEach(row => {
-                        const cells = row.querySelectorAll('td');
-                        if (cells.length > 0) {
-                            data.push({
-                                'Name': cells[0].innerText,
-                                'Address': cells[1].innerText,
-                                'Type': cells[2].innerText,
-                                'Program(s)': cells[3].innerText,
-                                'List': cells[4].innerText,
-                                'Score': cells[5].innerText
-                            });
-                        }
+                // Esperar a que los resultados de la búsqueda se carguen
+                const hasResults = await page.waitForSelector('#gvSearchResults tr', { visible: true, timeout: 1000 })
+                .then(() => true).catch(() => false);
+                if (hasResults) {
+                    // Extraer los datos de los resultados de la búsqueda
+                    results = await page.evaluate(() => {
+                        let data = [];
+                        document.querySelectorAll('#gvSearchResults tr').forEach(row => {
+                            const cells = row.querySelectorAll('td');
+                            if (cells.length > 0) {
+                                data.push({
+                                    'Name': cells[0].innerText,
+                                    'Address': cells[1].innerText,
+                                    'Type': cells[2].innerText,
+                                    'Program(s)': cells[3].innerText,
+                                    'List': cells[4].innerText,
+                                    'Score': cells[5].innerText
+                                });
+                            }
+                        });
+                        return data;
                     });
-                    return data;
-                });
-                resultsCount = results.length;
+                    resultsCount = results.length;
+                }
             } catch (e) {
                 message = message = "Error durante la búsqueda de resultados";
             }
